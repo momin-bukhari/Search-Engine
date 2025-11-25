@@ -24,6 +24,7 @@ dist-ssr
 *.sw?
 
 # JSON index files to ignore
+arxiv.json
 lexicon.json
 forwardIndex.json
 invertedIndex.json
