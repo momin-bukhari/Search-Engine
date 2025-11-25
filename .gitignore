@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# JSON index files to ignore
+lexicon.json
+forwardIndex.json
+invertedIndex.json
