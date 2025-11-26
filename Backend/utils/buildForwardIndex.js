@@ -3,9 +3,9 @@ const path = require('path');
 
 // --- Configuration ---
 // Input files must be in the same directory as this script
-const ARTICLES_INPUT_FILE = './arxiv.json';
-const VOCABULARY_INPUT_FILE = './lexicon.json';
-const OUTPUT_FILE = './forwardIndex.json';
+const ARTICLES_INPUT_FILE = '../data/arxiv.json';
+const VOCABULARY_INPUT_FILE = '../data/lexicon.json';
+const OUTPUT_FILE = '../data/forwardIndex.json';
 
 const MIN_WORD_LENGTH = 3;
 const TOKEN_REGEX = /[a-z]+/g;

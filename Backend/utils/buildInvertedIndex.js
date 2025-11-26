@@ -2,8 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 // --- Configuration ---
-const FORWARD_INDEX_INPUT_FILE = './forwardIndex.json';
-const OUTPUT_FILE = './invertedIndex.json';
+const FORWARD_INDEX_INPUT_FILE = '../data/forwardIndex.json';
+const OUTPUT_FILE = '../data/invertedIndex.json';
 
 /**
  * Load Forward Index (DocID -> { WordID: TF, ... }) from file

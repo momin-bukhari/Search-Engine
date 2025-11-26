@@ -2,8 +2,8 @@ const fs = require('fs');
 const path = require('path');
 
 // --- Configuration ---
-const INPUT_FILE = './arxiv.json';
-const OUTPUT_FILE = './lexicon.json';
+const INPUT_FILE = '../data/arxiv.json';
+const OUTPUT_FILE = '../data/lexicon.json';
 const MIN_WORD_LENGTH = 3;
 
 // Common words to ignore
