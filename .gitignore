@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 
 # JSON index files to ignore
+barrels/*
+!barrels/.gitkeep
