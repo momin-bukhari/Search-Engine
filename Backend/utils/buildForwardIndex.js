@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { Writable } = require('stream');
 
 // --- Configuration ---
-// Input files must be in the same directory as this script
 const ARTICLES_INPUT_FILE = '../data/arxiv.json';
 const VOCABULARY_INPUT_FILE = '../data/lexicon.json';
 const OUTPUT_FILE = '../data/forwardIndex.json';
@@ -10,112 +10,144 @@ const OUTPUT_FILE = '../data/forwardIndex.json';
 const MIN_WORD_LENGTH = 3;
 const TOKEN_REGEX = /[a-z]+/g;
 
-// Stop words list must match lexicon generation for consistency
+// Field identifiers used during ranking
+const FIELD_TYPES = {
+    TITLE: 1,
+    ABSTRACT: 2,
+    CATEGORIES: 3,
+    AUTHORS: 4,
+    SUBMITTER: 5
+};
+
+// Stop words to skip during indexing
 const STOP_WORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "but", "by",
-  "for", "if", "in", "is", "it", "no", "not", "of", "on",
-  "or", "such", "that", "the", "their", "then", "there", "these",
-  "they", "this", "to", "was", "will", "with", "from", "which",
-  "can", "we", "i", "my", "your", "its", "all", "our"
+    "a", "an", "and", "are", "as", "at", "be", "but", "by",
+    "for", "if", "in", "is", "it", "no", "not", "of", "on",
+    "or", "such", "that", "the", "their", "then", "there",
+    "these", "they", "this", "to", "was", "will", "with",
+    "from", "which", "can", "we", "i", "my", "your", "its",
+    "all", "our"
 ]);
 
-/**
- * Load vocabulary (word → wordId) from the lexicon file.
- */
+// Load vocabulary (word → wordId)
 function loadVocabulary(filePath) {
     try {
-        const rawData = fs.readFileSync(filePath, 'utf8');
-        return JSON.parse(rawData);
+        const raw = fs.readFileSync(filePath, 'utf8');
+        return JSON.parse(raw);
     } catch (err) {
-        console.error(`ERROR: Could not load vocabulary from ${filePath}. Ensure lexicon exists.`);
+        console.error(`ERROR: Failed to load vocabulary from ${path.resolve(filePath)}`);
         throw err;
     }
 }
 
-/**
- * Build Forward Index: DocID → { WordID: TermFrequency, ... }
- */
+// Stream-save the forward index to avoid large JSON memory issues
+function saveForwardIndexStream(filePath, dataMap) {
+    const fullPath = path.resolve(__dirname, filePath);
+    const stream = fs.createWriteStream(fullPath);
+    let isFirst = true;
+
+    return new Promise((resolve, reject) => {
+        stream.on('error', reject);
+
+        stream.write("{\n");
+
+        for (const [docId, docEntry] of dataMap.entries()) {
+            if (!isFirst) stream.write(",\n");
+
+            const entryJson = JSON.stringify(docEntry);
+            stream.write(`  "${docId}": ${entryJson}`);
+
+            isFirst = false;
+        }
+
+        stream.write("\n}");
+        stream.end(resolve);
+    });
+}
+
+// Build forward index: DocID → { wordID: [ {pos, type}, ... ] }
 function buildForwardIndex(articles, vocabulary) {
     const forwardIndex = new Map();
-    let processedCount = 0;
+    let processed = 0;
 
     for (const article of articles) {
         if (!article || !article.id) continue;
+
         const docId = article.id;
-        const docEntry = {}; // { wordId: frequency }
+        const docEntry = {};
+        let position = 0;
 
         try {
-            // Fields to index (same as lexicon script)
             const fields = [
-                article.submitter,
-                article.authors,
-                article.title,
-                article.abstract,
-                article.categories
-            ].filter(Boolean);
+                { text: article.title, type: FIELD_TYPES.TITLE },
+                { text: article.abstract, type: FIELD_TYPES.ABSTRACT },
+                { text: article.categories, type: FIELD_TYPES.CATEGORIES },
+                { text: article.authors, type: FIELD_TYPES.AUTHORS },
+                { text: article.submitter, type: FIELD_TYPES.SUBMITTER }
+            ].filter(f => f.text);
 
             if (fields.length === 0) continue;
 
-            // Merge fields and tokenize
-            const text = fields.join(' ').toLowerCase();
-            const tokens = text.match(TOKEN_REGEX) || [];
+            for (const field of fields) {
+                const tokens = field.text.toLowerCase().match(TOKEN_REGEX) || [];
 
-            for (const token of tokens) {
-                if (token.length < MIN_WORD_LENGTH || STOP_WORDS.has(token)) continue;
+                for (const token of tokens) {
+                    if (token.length < MIN_WORD_LENGTH || STOP_WORDS.has(token)) {
+                        position++;
+                        continue;
+                    }
 
-                const wordId = vocabulary[token];
-                if (wordId) {
-                    // Count term frequency
-                    docEntry[wordId] = (docEntry[wordId] || 0) + 1;
+                    const wordId = vocabulary[token];
+                    if (wordId) {
+                        const hit = { pos: position, type: field.type };
+
+                        if (!docEntry[wordId]) {
+                            docEntry[wordId] = [];
+                        }
+
+                        docEntry[wordId].push(hit);
+                    }
+
+                    position++;
                 }
             }
 
-            // Only add documents that have indexed words
             if (Object.keys(docEntry).length > 0) {
                 forwardIndex.set(docId, docEntry);
-                processedCount++;
+                processed++;
             }
 
         } catch (err) {
-            console.error(`Skipping corrupted article (ID: ${docId}): ${err.message}`);
-            continue;
+            console.error(`Skipping article ${docId}: ${err.message}`);
         }
     }
 
-    console.log(`Successfully built forward index for ${processedCount} documents.`);
+    console.log(`Forward index built for ${processed} documents.`);
     return forwardIndex;
 }
 
-/**
- * Main execution
- */
-function main() {
+// Main workflow
+async function main() {
     try {
         const vocabPath = path.join(__dirname, VOCABULARY_INPUT_FILE);
         const articlesPath = path.join(__dirname, ARTICLES_INPUT_FILE);
         const outputPath = path.join(__dirname, OUTPUT_FILE);
 
-        // 1. Load vocabulary
         const vocabulary = loadVocabulary(vocabPath);
-        console.log(`Loaded ${Object.keys(vocabulary).length} unique words from ${VOCABULARY_INPUT_FILE}.`);
+        console.log(`Loaded ${Object.keys(vocabulary).length} words from lexicon.`);
 
-        // 2. Load articles
-        const rawArticlesData = fs.readFileSync(articlesPath, 'utf8');
-        const articles = JSON.parse(rawArticlesData);
-        console.log(`Loaded ${articles.length} articles from ${ARTICLES_INPUT_FILE}.`);
+        const rawArticles = fs.readFileSync(articlesPath, 'utf8');
+        const articles = JSON.parse(rawArticles);
+        console.log(`Loaded ${articles.length} articles.`);
 
-        // 3. Build forward index
         const forwardIndexMap = buildForwardIndex(articles, vocabulary);
 
-        // Convert Map → plain object for JSON
-        const forwardIndexObj = Object.fromEntries(forwardIndexMap);
-
-        // 4. Save forward index
-        fs.writeFileSync(outputPath, JSON.stringify(forwardIndexObj, null, 2));
+        console.log("Saving forward index (stream mode)...");
+        await saveForwardIndexStream(outputPath, forwardIndexMap);
 
         console.log("\n--- Forward Index Generation Complete ---");
-        console.log(`Total indexed documents: ${forwardIndexMap.size}`);
-        console.log(`File written to: ${outputPath}`);
+        console.log(`Indexed documents: ${forwardIndexMap.size}`);
+        console.log(`Saved to: ${path.resolve(__dirname, outputPath)}`);
 
     } catch (err) {
         console.error("\nCRITICAL ERROR:", err.message);

@@ -1,126 +1,151 @@
 const fs = require('fs');
 const path = require('path');
+const { Writable } = require('stream');
 
-// Configuration
+// --- Configuration ---
+const APPEND_INPUT_FILE = '../data/appendArxiv.json';
+const LEXICON_FILE = '../data/lexicon.json';
+const BARRELS_DIR = '../data/barrels';
 
-const APPEND_INPUT_FILE = '../data/appendArxiv.json';   
-const LEXICON_FILE = '../data/lexicon.json';    
-const FORWARD_INDEX_FILE = '../data/forwardIndex.json';
-const INVERTED_INDEX_FILE = '../data/invertedIndex.json';
-
+const NUM_BARRELS = 64;            // Must match barrel generation config
 const MIN_WORD_LENGTH = 3;
 const TOKEN_REGEX = /[a-z]+/g;
 
-// Common stopwords to ignore during tokenization
+// Field types used during ranking and indexing
+const FIELD_TYPES = {
+    TITLE: 1,
+    ABSTRACT: 2,
+    CATEGORIES: 3,
+    AUTHORS: 4,
+    SUBMITTER: 5
+};
+
+// Stopwords to skip during tokenization
 const STOP_WORDS = new Set([
     "a", "an", "and", "are", "as", "at", "be", "but", "by",
     "for", "if", "in", "is", "it", "no", "not", "of", "on",
-    "or", "such", "that", "the", "their", "then", "there", "these",
-    "they", "this", "to", "was", "will", "with", "from", "which",
-    "can", "we", "i", "my", "your", "its", "all", "our"
+    "or", "such", "that", "the", "their", "then", "there",
+    "these", "they", "this", "to", "was", "will", "with",
+    "from", "which", "can", "we", "i", "my", "your", "its",
+    "all", "our"
 ]);
 
-/**
- * Loads a JSON file. If `asMap` is true, converts the object into a Map.
- */
+// Load a JSON file; optionally convert to Map
 function loadIndex(filePath, asMap = true) {
     try {
-        const fullPath = path.join(__dirname, filePath);
-        const rawData = fs.readFileSync(fullPath, 'utf8');
-        const obj = JSON.parse(rawData);
-
-        return asMap ? new Map(Object.entries(obj)) : obj;
+        const fullPath = path.resolve(__dirname, filePath);
+        const raw = fs.readFileSync(fullPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        return asMap ? new Map(Object.entries(parsed)) : parsed;
     } catch (err) {
-        console.error(`ERROR: Failed to load ${filePath}.`);
+        console.error(`ERROR: Failed to load ${filePath}`);
         throw err;
     }
 }
 
-/**
- * Saves a Map or object to a JSON file.
- * Maps are converted back into plain objects before serialization.
- */
-function saveIndex(filePath, data) {
-    const fullPath = path.join(__dirname, filePath);
+// Save lexicon (small file → safe to write synchronously)
+function saveLexicon(filePath, data) {
+    const fullPath = path.resolve(__dirname, filePath);
     const obj = data instanceof Map ? Object.fromEntries(data) : data;
     fs.writeFileSync(fullPath, JSON.stringify(obj, null, 2));
 }
 
-/**
- * Returns the next unused wordId.
- * We scan through lexicon values and pick max + 1.
- */
+// Get next available wordId
 function findNextWordId(lexicon) {
     let maxId = 0;
     for (const id of lexicon.values()) {
-        if (id > maxId) maxId = id;
+        const n = parseInt(id);
+        if (n > maxId) maxId = n;
     }
     return maxId + 1;
 }
 
-// Core indexing logic
+// Load a single barrel (or return empty map if not found)
+function loadBarrel(barrelIndex) {
+    const barrelPath = path.resolve(__dirname, BARRELS_DIR, `barrel_${barrelIndex}.json`);
+    try {
+        const raw = fs.readFileSync(barrelPath, 'utf8');
+        return new Map(Object.entries(JSON.parse(raw)));
+    } catch (err) {
+        if (err.code === 'ENOENT') return new Map();
+        throw err;
+    }
+}
 
-/**
- * Processes new articles:
- *   - updates the lexicon when new words appear
- *   - builds new forward index entries (per-document word counts)
- *   - builds new inverted index postings (word → document list)
- */
+// Save a single barrel back to disk
+function saveBarrel(barrelIndex, dataMap) {
+    const barrelPath = path.resolve(__dirname, BARRELS_DIR, `barrel_${barrelIndex}.json`);
+    fs.writeFileSync(barrelPath, JSON.stringify(Object.fromEntries(dataMap), null, 2));
+}
+
+// Process new articles into postings and update lexicon
 function processNewArticles(newArticles, lexicon, nextWordId) {
-    const newForwardEntries = new Map();
-    const newInvertedPostings = new Map();
-    let processedCount = 0;
+    const newPostingsByBarrel = new Map();
+    let processed = 0;
+    let totalHits = 0;
 
     for (const article of newArticles) {
         if (!article || !article.id) continue;
 
         const docId = article.id;
-        const docEntry = {};  // wordId → term frequency
+        const docEntry = {};
+        let position = 0;
 
         try {
-            // Combine all text fields used for indexing
             const fields = [
-                article.submitter,
-                article.authors,
-                article.title,
-                article.abstract,
-                article.categories
-            ].filter(Boolean);
+                { text: article.title, type: FIELD_TYPES.TITLE },
+                { text: article.abstract, type: FIELD_TYPES.ABSTRACT },
+                { text: article.categories, type: FIELD_TYPES.CATEGORIES },
+                { text: article.authors, type: FIELD_TYPES.AUTHORS },
+                { text: article.submitter, type: FIELD_TYPES.SUBMITTER }
+            ].filter(f => f.text);
 
             if (fields.length === 0) continue;
 
-            const text = fields.join(' ').toLowerCase();
-            const tokens = text.match(TOKEN_REGEX) || [];
+            for (const field of fields) {
+                const tokens = field.text.toLowerCase().match(TOKEN_REGEX) || [];
 
-            // Tokenize + update lexicon + compute term frequency
-            for (const token of tokens) {
-                if (token.length < MIN_WORD_LENGTH || STOP_WORDS.has(token)) continue;
+                for (const token of tokens) {
+                    if (token.length < MIN_WORD_LENGTH || STOP_WORDS.has(token)) {
+                        position++;
+                        continue;
+                    }
 
-                let wordId = lexicon.get(token);
+                    let wordId = lexicon.get(token);
+                    if (!wordId) {
+                        wordId = String(nextWordId++);
+                        lexicon.set(token, wordId);
+                    }
 
-                // New word → assign new ID
-                if (!wordId) {
-                    wordId = String(nextWordId++);
-                    lexicon.set(token, wordId);
+                    const hit = { pos: position, type: field.type };
+
+                    if (!docEntry[wordId]) docEntry[wordId] = [];
+                    docEntry[wordId].push(hit);
+
+                    totalHits++;
+                    position++;
                 }
-
-                docEntry[wordId] = (docEntry[wordId] || 0) + 1;
             }
 
-            // Skip empty docs
             if (Object.keys(docEntry).length === 0) continue;
 
-            newForwardEntries.set(docId, docEntry);
-
-            // Build postings for inverted index
             for (const wId in docEntry) {
-                const posting = { docId, tf: docEntry[wId] };
-                const list = newInvertedPostings.get(wId) || [];
+                const hitList = docEntry[wId];
+                const barrelIdx = parseInt(wId) % NUM_BARRELS;
+                const posting = { docId, hits: hitList };
+
+                let barrelMap = newPostingsByBarrel.get(barrelIdx);
+                if (!barrelMap) {
+                    barrelMap = new Map();
+                    newPostingsByBarrel.set(barrelIdx, barrelMap);
+                }
+
+                const list = barrelMap.get(wId) || [];
                 list.push(posting);
-                newInvertedPostings.set(wId, list);
+                barrelMap.set(wId, list);
             }
 
-            processedCount++;
+            processed++;
 
         } catch (err) {
             console.error(`Skipping article ${docId}: ${err.message}`);
@@ -128,57 +153,64 @@ function processNewArticles(newArticles, lexicon, nextWordId) {
     }
 
     return {
-        newForwardEntries,
-        newInvertedPostings,
+        newPostingsByBarrel,
         updatedLexicon: lexicon,
         newNextWordId: nextWordId,
-        processedCount
+        processedCount: processed,
+        totalNewHits: totalHits
     };
 }
 
+// Merge new postings into barrels on disk
+function mergeNewPostings(newPostingsByBarrel) {
+    let barrelsUpdated = 0;
+    let totalMerged = 0;
+
+    for (const [barrelIdx, newMap] of newPostingsByBarrel) {
+        const existing = loadBarrel(barrelIdx);
+
+        for (const [wordId, newPosts] of newMap) {
+            const existingPosts = existing.get(wordId) || [];
+            existingPosts.push(...newPosts);
+            existing.set(wordId, existingPosts);
+            totalMerged += newPosts.length;
+        }
+
+        saveBarrel(barrelIdx, existing);
+        barrelsUpdated++;
+    }
+
+    return { barrelsUpdated, totalMerged };
+}
+
+// Main workflow
 function main() {
     try {
-        // Load existing indices into memory
-        let lexicon = loadIndex(LEXICON_FILE);
-        let forwardIndex = loadIndex(FORWARD_INDEX_FILE);
-        let invertedIndex = loadIndex(INVERTED_INDEX_FILE);
+        const lexicon = loadIndex(LEXICON_FILE);
         const newArticles = loadIndex(APPEND_INPUT_FILE, false);
 
-        console.log(`Loaded ${lexicon.size} words.`);
-        console.log(`Loaded ${forwardIndex.size} documents.`);
-        console.log(`Incoming articles: ${newArticles.length}`);
+        console.log(`Loaded lexicon with ${lexicon.size} words.`);
+        console.log(`Articles to append: ${newArticles.length}`);
 
         let nextWordId = findNextWordId(lexicon);
 
-        // Process and index new articles
         const {
-            newForwardEntries,
-            newInvertedPostings,
+            newPostingsByBarrel,
             updatedLexicon,
-            processedCount
+            processedCount,
+            totalNewHits
         } = processNewArticles(newArticles, lexicon, nextWordId);
 
-        // Merge new forward index entries
-        for (const [docId, entry] of newForwardEntries) {
-            forwardIndex.set(docId, entry);
-        }
+        const { barrelsUpdated, totalMerged } = mergeNewPostings(newPostingsByBarrel);
 
-        // Merge new inverted index postings
-        for (const [wordId, postings] of newInvertedPostings) {
-            const existing = invertedIndex.get(wordId) || [];
-            existing.push(...postings);
-            invertedIndex.set(wordId, existing);
-        }
-
-        // Save updated indices to disk
-        saveIndex(LEXICON_FILE, updatedLexicon);
-        saveIndex(FORWARD_INDEX_FILE, forwardIndex);
-        saveIndex(INVERTED_INDEX_FILE, invertedIndex);
+        saveLexicon(LEXICON_FILE, updatedLexicon);
 
         console.log("\n--- Incremental Indexing Complete ---");
-        console.log(`Indexed new documents: ${processedCount}`);
-        console.log(`Total words: ${updatedLexicon.size}`);
-        console.log(`Total documents: ${forwardIndex.size}`);
+        console.log(`New documents indexed: ${processedCount}`);
+        console.log(`New hits collected: ${totalNewHits}`);
+        console.log(`Barrels updated: ${barrelsUpdated}`);
+        console.log(`Total postings merged: ${totalMerged}`);
+        console.log(`Updated lexicon size: ${updatedLexicon.size}`);
 
     } catch (err) {
         console.error("\nCRITICAL ERROR:", err.message);
