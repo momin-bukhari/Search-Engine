@@ -1,5 +1,4 @@
 /**
- * Trie.js
  * Implements a Trie (Prefix Tree) structure for efficient prefix matching.
  */
 class TrieNode {
