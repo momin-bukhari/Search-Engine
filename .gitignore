@@ -25,3 +25,10 @@ dist-ssr
 
 # JSON index files to ignore
 arxiv.json
+lexicon.json
+forwardIndex.json
+invertedIndex.json
+appendArxiv.json
+docStore.json
+barrels
+glove.6B.50d.txt

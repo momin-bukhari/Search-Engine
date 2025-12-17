@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { Trie } = require('./trie');
+const semanticModel = require('./semanticModel'); // Import the new file
 
 // --- Configuration ---
 const VOCABULARY_INPUT_FILE = '../data/lexicon.json';
@@ -129,89 +130,183 @@ function calculateProximityBonus(docPostings) {
     return Math.max(0, maxSpan - Math.min(span, maxSpan)) / 100;
 }
 
+/**
+ * Turns ["mobile", "data"] into:
+ * [ Set("mobile", "phone"), Set("data", "info") ]
+ */
+function getQueryGroups(tokens) {
+    const groups = [];
+    
+    for (const token of tokens) {
+        const group = new Set();
+        group.add(token); // Always keep the original word
+        
+        // Ask GloVe for synonyms
+        const synonyms = semanticModel.findSynonyms(token);
+        
+        // Add synonyms to the group
+        synonyms.forEach(syn => group.add(syn));
+        
+        if (synonyms.length > 0) {
+            console.log(`[Semantic] Expanded "${token}" -> [${synonyms.join(", ")}]`);
+        }
+        
+        groups.push(group);
+    }
+    return groups;
+}
+
 function executeSearch(query) {
     const startTime = Date.now();
-
     const queryTokens = tokenizeQuery(query);
-    if (!queryTokens.length) {
-        return { results: [], time: 0, tokens: [] };
-    }
+    
+    if (!queryTokens.length) return { results: [], time: 0, tokens: [] };
 
-    const wordIds = [];
+    // 1. Expand Query: Get groups of synonyms
+    // e.g. [ Set("mobile", "phone"), Set("data", "info") ]
+    const termGroups = getQueryGroups(queryTokens);
+    
+    // 2. Identify ALL WordIDs needed (Originals + Synonyms)
+    const allWordIds = [];
     const barrelsToLoad = new Set();
+    
+    // We need to know which group a word belongs to.
+    // Map: wordId -> [groupIndex1, groupIndex2...]
+    // (A word could theoretically belong to multiple groups)
+    const wordIdToGroupIdx = {}; 
 
-    for (const token of queryTokens) {
-        const id = vocabulary[token];
-        if (id) {
-            wordIds.push(id);
-            barrelsToLoad.add(getBarrelIndex(id));
+    termGroups.forEach((group, groupIdx) => {
+        for (const word of group) {
+            const id = vocabulary[word];
+            if (id) {
+                allWordIds.push(id);
+                barrelsToLoad.add(getBarrelIndex(id));
+                
+                if (!wordIdToGroupIdx[id]) wordIdToGroupIdx[id] = [];
+                wordIdToGroupIdx[id].push(groupIdx);
+            }
         }
+    });
+
+    if (!allWordIds.length) {
+        return { results: [], time: Date.now() - startTime, tokens: queryTokens };
     }
 
-    if (!wordIds.length) {
-        return { results: [], time: 0, tokens: queryTokens };
-    }
-
-    // Load required barrels
-    const loaded = {};
+    // 3. Load Barrels into Memory
+    const loadedPostings = {}; // wordId -> [postings]
     for (const idx of barrelsToLoad) {
         const barrel = loadBarrel(idx);
-        for (const [id, postings] of barrel.entries()) {
-            loaded[id] = postings;
-        }
-    }
-
-    // Intersect posting lists
-    const candidateDocs = {};
-    const firstWord = wordIds[0];
-    const firstPostings = loaded[firstWord] || [];
-
-    for (const p of firstPostings) {
-        candidateDocs[p.docId] = [p];
-    }
-
-    for (let i = 1; i < wordIds.length; i++) {
-        const id = wordIds[i];
-        const postings = loaded[id] || [];
-        const map = new Map(postings.map(p => [p.docId, p]));
-
-        for (const docId in candidateDocs) {
-            if (map.has(docId)) {
-                candidateDocs[docId].push(map.get(docId));
-            } else {
-                delete candidateDocs[docId];
+        for (const id of allWordIds) {
+            if (barrel.has(String(id))) {
+                loadedPostings[id] = barrel.get(String(id));
             }
         }
     }
 
-    // Score and sort results
-    const results = [];
-    for (const docId in candidateDocs) {
-        const postings = candidateDocs[docId];
+    // 4. Build Document Sets for each Group (OR Logic)
+    // We want Docs containing ("mobile" OR "phone")
+    const groupDocs = []; // Array of Maps: [ Map(DocID -> Posting), ... ]
 
-        let score = 0;
-        for (const p of postings) {
-            score += calculateSingleWordScore(p);
+    for (let i = 0; i < termGroups.length; i++) {
+        const docsInThisGroup = new Map();
+        const currentGroupSet = termGroups[i];
+
+        for (const word of currentGroupSet) {
+            const id = vocabulary[word];
+            if (loadedPostings[id]) {
+                for (const posting of loadedPostings[id]) {
+                    
+                    // SCORING: 
+                    // If it's the exact word user typed, keep score 100%
+                    // If it's a synonym (GloVe match), penalize it (50% score)
+                    const isExactMatch = (word === queryTokens[i]);
+                    
+                    // Create a lightweight posting copy to attach the 'isExact' flag
+                    const scoredPosting = { ...posting, isExact: isExactMatch };
+
+                    // If this doc is already in the list for this group, 
+                    // only overwrite it if the new match is "Better" (Exact vs Synonym)
+                    const existing = docsInThisGroup.get(posting.docId);
+                    if (!existing || (scoredPosting.isExact && !existing.isExact)) {
+                        docsInThisGroup.set(posting.docId, scoredPosting);
+                    }
+                }
+            }
+        }
+        groupDocs.push(docsInThisGroup);
+    }
+
+    // 5. Intersect the Groups (AND Logic)
+    // We want: Group1 AND Group2 ...
+    if (groupDocs.length === 0) return { results: [], time: 0, tokens: queryTokens };
+
+    // Optimization: Start intersection with the smallest group
+    groupDocs.sort((a, b) => a.size - b.size);
+    
+    let candidateDocs = groupDocs[0]; // Start with first group
+
+    for (let i = 1; i < groupDocs.length; i++) {
+        const nextGroup = groupDocs[i];
+        const intersection = new Map();
+
+        for (const [docId, posting] of candidateDocs) {
+            if (nextGroup.has(docId)) {
+                // Document exists in both groups!
+                // We combine them into an array of postings for final scoring
+                // Handle cases where 'posting' is already an array (from previous loop)
+                const prevPostings = Array.isArray(posting) ? posting : [posting];
+                const nextPostings = Array.isArray(nextGroup.get(docId)) ? nextGroup.get(docId) : [nextGroup.get(docId)];
+                
+                intersection.set(docId, [...prevPostings, ...nextPostings]);
+            }
+        }
+        candidateDocs = intersection;
+        if (candidateDocs.size === 0) break; // No documents match all terms
+    }
+
+    // 6. Calculate Final Scores
+    const results = [];
+    for (const [docId, postingData] of candidateDocs) {
+        const postingsArr = Array.isArray(postingData) ? postingData : [postingData];
+        
+        let totalScore = 0;
+        let exactMatchesCount = 0;
+
+        for (const p of postingsArr) {
+            let wordScore = calculateSingleWordScore(p);
+            
+            // RANKING PENALTY (Requirement #8)
+            // Synonyms get 0.5x score, Exact matches get 1.0x
+            if (!p.isExact) {
+                wordScore *= 0.5; 
+            } else {
+                exactMatchesCount++;
+            }
+            totalScore += wordScore;
         }
 
-        if (wordIds.length > 1) {
-            score += calculateProximityBonus(postings);
+        // Add Proximity Bonus if we have multiple words
+        if (postingsArr.length > 1) {
+            totalScore += calculateProximityBonus(postingsArr);
         }
 
         results.push({
             docId,
-            score,
-            wordCount: postings.length,
-            proximityBonus: wordIds.length > 1 ? calculateProximityBonus(postings) : 0,
+            score: totalScore,
+            wordCount: postingsArr.length,
+            // Tag result as "Semantic" if it relies on synonyms
+            matchType: (exactMatchesCount === queryTokens.length) ? "Exact" : "Semantic"
         });
     }
 
+    // Sort by Score
     results.sort((a, b) => b.score - a.score);
 
     return {
         results,
         time: Date.now() - startTime,
         tokens: queryTokens,
+        expandedTokens: termGroups, // Optional: useful for debugging
         totalResults: results.length
     };
 }
@@ -224,25 +319,29 @@ module.exports = {
     /**
      * Initialize the search engine
      */
-    initialize: function () {
-        // If vocabulary is null, it means the main thread cache is stale or uninitialized
+    initialize: async function () { // <--- Make this ASYNC
         if (!vocabulary) {
             const words = loadLexicon();
-            loadDocStore(); 
+            loadDocStore();
             initializeTrie(words);
             
-            // ⬅️ CRITICAL: Update the timestamp after all caches are loaded
+            // --- NEW: Load Semantic Vectors ---
+            console.log("[SearchEngine] Initializing Semantic Model...");
+            const vocabSet = new Set(Object.keys(vocabulary));
+            await semanticModel.load(vocabSet);
+            // ----------------------------------
+
             lastInitialized = Date.now();
             console.log('[SearchEngine] Initialization complete.');
         } else {
-            // This case handles cache reloads after indexing completes
-            const words = loadLexicon(); // Re-load Lexicon to get new words
-            loadDocStore();             // Re-load Doc Store to get new metadata
-            initializeTrie(words);      // Re-build Trie with new words
-            lastInitialized = Date.now(); // Update the timestamp
-            console.log('[SearchEngine] Cache reload complete.');
-        }
-    },
+                // This case handles cache reloads after indexing completes
+                const words = loadLexicon(); // Re-load Lexicon to get new words
+                loadDocStore();             // Re-load Doc Store to get new metadata
+                initializeTrie(words);      // Re-build Trie with new words
+                lastInitialized = Date.now(); // Update the timestamp
+                console.log('[SearchEngine] Cache reload complete.');
+            }
+        },
 
     /**
      * Get autocomplete suggestions
