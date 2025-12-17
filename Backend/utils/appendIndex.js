@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-// ⬅️ ADDED: Worker Thread API
+// ADDED: Worker Thread API
 const { parentPort, workerData } = require('worker_threads'); 
 
 // --- Configuration ---
@@ -9,7 +9,7 @@ const DOC_STORE_FILE = '../data/docStore.json';
 const FORWARD_INDEX_FILE = '../data/forwardIndex.json'; 
 const BARRELS_DIR = '../data/barrels';
 
-const NUM_BARRELS = 64;           
+const NUM_BARRELS = 64;
 const MIN_WORD_LENGTH = 3;
 const TOKEN_REGEX = /[a-z]+/g;
 

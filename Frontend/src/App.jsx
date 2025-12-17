@@ -4,7 +4,7 @@ import ResultsList from './components/ResultsList';
 import AdminIndexer from './components/AdminIndexer'; 
 import './App.css';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API_BASE_URL = "https://searchengine-fbgxh3fed2ddbnag.centralindia-01.azurewebsites.net" || 'http://localhost:3001';
 
 // Main App component
 function App() {
