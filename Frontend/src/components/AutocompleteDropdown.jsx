@@ -1,13 +1,17 @@
 import './AutocompleteDropdown.css';
 
-// Dropdown component to show autocomplete suggestions
-// Props:
-// - suggestions: array of suggested words
-// - onSelect: callback when a suggestion is clicked
-// - query: current user input to highlight matching substring
+/**
+ * AutocompleteDropdown Component
+ * Displays a list of suggestions for autocomplete.
+ * 
+ * Props:
+ * - suggestions: Array of suggested words
+ * - onSelect: Callback when a suggestion is clicked
+ * - query: Current user input to highlight matching substring
+ */
 function AutocompleteDropdown({ suggestions, onSelect, query }) {
 
-  // Highlights the part of the suggestion that matches the query
+  // Highlights the part of a suggestion that matches the query
   const highlightMatch = (text, query) => {
     const lowerText = text.toLowerCase();
     const lowerQuery = query.toLowerCase();
@@ -33,11 +37,11 @@ function AutocompleteDropdown({ suggestions, onSelect, query }) {
       <ul className="autocomplete-list">
         {suggestions.map((suggestion, index) => (
           <li
-            key={`${suggestion}-${index}`} // Unique key per suggestion
+            key={`${suggestion}-${index}`} // Unique key for each suggestion
             className="autocomplete-item"
             onClick={() => onSelect(suggestion)}
           >
-            {/* Small icon next to each suggestion */}
+            {/* Icon displayed next to each suggestion */}
             <svg 
               className="suggestion-icon" 
               viewBox="0 0 24 24" 

@@ -6,7 +6,6 @@ import './App.css';
 
 const API_BASE_URL = "https://searchengine-fbgxh3fed2ddbnag.centralindia-01.azurewebsites.net" || 'http://localhost:3001';
 
-// Main App component
 function App() {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -16,7 +15,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [totalResults, setTotalResults] = useState(0);
-  const [showAdmin, setShowAdmin] = useState(false); // Toggle for Admin Indexer
+  const [showAdmin, setShowAdmin] = useState(false); // Toggle Admin Indexer panel
 
   const RESULTS_PER_PAGE = 10;
 
@@ -62,6 +61,7 @@ function App() {
     }
   };
 
+  // Load next page of results
   const handleLoadMore = () => {
     handleSearch(searchQuery, currentPage + 1);
   };
@@ -72,6 +72,7 @@ function App() {
         <div className="container">
           <h1 className="app-title">LexiFast</h1>
           <p className="app-subtitle">Search through thousands of academic papers in a wink</p>
+
           {/* Toggle Admin Indexer panel */}
           <button 
             className="admin-toggle-button"

@@ -2,21 +2,25 @@ import { useState, useEffect, useRef } from 'react';
 import AutocompleteDropdown from './AutocompleteDropdown';
 import './SearchBar.css';
 
-// Search input component with autocomplete support
-// Props:
-// - onSearch: callback when user submits a query
-// - apiBaseUrl: backend API base URL for autocomplete
+/**
+ * SearchBar Component
+ * Handles user input for search queries with live autocomplete support.
+ * 
+ * Props:
+ * - onSearch: Function called when a search is submitted
+ * - apiBaseUrl: Base URL for backend API requests (used for autocomplete)
+ */
 function SearchBar({ onSearch, apiBaseUrl }) {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
-  const searchInputRef = useRef(null);  // Reference to the input element
-  const dropdownRef = useRef(null);     // Reference to dropdown wrapper
+  const searchInputRef = useRef(null);   // Reference to the input element
+  const dropdownRef = useRef(null);      // Reference to dropdown wrapper
   const debounceTimerRef = useRef(null); // Debounce timer for API calls
 
-  // Close dropdown if clicking outside
+  // Close dropdown when clicking outside the input or dropdown
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (
@@ -32,7 +36,7 @@ function SearchBar({ onSearch, apiBaseUrl }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Fetch autocomplete suggestions from backend
+  // Fetch autocomplete suggestions from the backend
   const fetchSuggestions = async (searchQuery) => {
     if (!searchQuery.trim() || searchQuery.trim().length < 2) {
       setSuggestions([]);
@@ -61,7 +65,7 @@ function SearchBar({ onSearch, apiBaseUrl }) {
     }
   };
 
-  // Handle input change with 200ms debounce
+  // Handle input changes with 200ms debounce to reduce API calls
   const handleInputChange = (e) => {
     const value = e.target.value;
     setQuery(value);
@@ -73,26 +77,26 @@ function SearchBar({ onSearch, apiBaseUrl }) {
     }, 200);
   };
 
-  // User clicks a suggestion
+  // Handle selection of an autocomplete suggestion
   const handleSuggestionClick = (suggestion) => {
     setQuery(suggestion);
     setShowDropdown(false);
     onSearch(suggestion);
   };
 
-  // Form submission
+  // Handle form submission
   const handleSubmit = (e) => {
     e.preventDefault();
     setShowDropdown(false);
     onSearch(query);
   };
 
-  // Show dropdown on focus if suggestions exist
+  // Show dropdown on input focus if suggestions are available
   const handleInputFocus = () => {
     if (suggestions.length > 0) setShowDropdown(true);
   };
 
-  // Escape key hides dropdown
+  // Hide dropdown when Escape key is pressed
   const handleKeyDown = (e) => {
     if (e.key === 'Escape') setShowDropdown(false);
   };
@@ -113,14 +117,14 @@ function SearchBar({ onSearch, apiBaseUrl }) {
             autoComplete="off"
           />
 
-          {/* Spinner when loading suggestions */}
+          {/* Spinner displayed while fetching suggestions */}
           {loadingSuggestions && (
             <div className="input-loading-indicator">
               <div className="mini-spinner"></div>
             </div>
           )}
 
-          {/* Autocomplete dropdown */}
+          {/* Autocomplete suggestions dropdown */}
           {showDropdown && suggestions.length > 0 && (
             <AutocompleteDropdown
               suggestions={suggestions}

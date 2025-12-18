@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-// ADDED: Worker Thread API
+// Worker Thread API for parallel indexing
 const { parentPort, workerData } = require('worker_threads'); 
 
 // --- Configuration ---
@@ -13,7 +13,7 @@ const NUM_BARRELS = 64;
 const MIN_WORD_LENGTH = 3;
 const TOKEN_REGEX = /[a-z]+/g;
 
-// Field types used during ranking and indexing
+// Field identifiers for ranking and indexing
 const FIELD_TYPES = {
     TITLE: 1,
     ABSTRACT: 2,
@@ -22,7 +22,7 @@ const FIELD_TYPES = {
     SUBMITTER: 5
 };
 
-// Stopwords to skip during tokenization
+// Stopwords to ignore during tokenization
 const STOP_WORDS = new Set([
     "a", "an", "and", "are", "as", "at", "be", "but", "by",
     "for", "if", "in", "is", "it", "no", "not", "of", "on",
@@ -32,8 +32,7 @@ const STOP_WORDS = new Set([
     "all", "our"
 ]);
 
-// ⬅️ All helper functions remain the same (loadIndex, saveLexicon, findNextWordId, etc.)
-
+// Load JSON as Map or plain object
 function loadIndex(filePath, asMap = true) {
     try {
         const fullPath = path.resolve(__dirname, filePath);
@@ -41,20 +40,20 @@ function loadIndex(filePath, asMap = true) {
         const parsed = JSON.parse(raw);
         return asMap ? new Map(Object.entries(parsed)) : parsed;
     } catch (err) {
-        if (err.code === 'ENOENT') {
-            return asMap ? new Map() : {};
-        }
+        if (err.code === 'ENOENT') return asMap ? new Map() : {};
         console.error(`ERROR: Failed to load ${filePath}: ${err.message}`);
         throw err;
     }
 }
 
+// Save Map or object to JSON file
 function saveLexicon(filePath, data) {
     const fullPath = path.resolve(__dirname, filePath);
     const obj = data instanceof Map ? Object.fromEntries(data) : data;
     fs.writeFileSync(fullPath, JSON.stringify(obj, null, 2));
 }
 
+// Find next available word ID in lexicon
 function findNextWordId(lexicon) {
     let maxId = 0;
     for (const id of lexicon.values()) {
@@ -64,6 +63,7 @@ function findNextWordId(lexicon) {
     return maxId + 1;
 }
 
+// Load a barrel file as Map
 function loadBarrel(barrelIndex) {
     const barrelPath = path.resolve(__dirname, BARRELS_DIR, `barrel_${barrelIndex}.json`);
     try {
@@ -75,11 +75,13 @@ function loadBarrel(barrelIndex) {
     }
 }
 
+// Save barrel Map to JSON
 function saveBarrel(barrelIndex, dataMap) {
     const barrelPath = path.resolve(__dirname, BARRELS_DIR, `barrel_${barrelIndex}.json`);
     fs.writeFileSync(barrelPath, JSON.stringify(Object.fromEntries(dataMap), null, 2));
 }
 
+// Update and save Doc Store with new articles
 function updateAndSaveDocStore(newArticles, docStore) {
     const fullPath = path.resolve(__dirname, DOC_STORE_FILE);
     
@@ -99,16 +101,15 @@ function updateAndSaveDocStore(newArticles, docStore) {
     return updatedStore;
 }
 
+// Update and save Forward Index with new entries
 function updateAndSaveForwardIndex(newForwardEntries, existingForwardIndex) {
     const fullPath = path.resolve(__dirname, FORWARD_INDEX_FILE);
-    
     const updatedForwardIndex = { ...existingForwardIndex, ...newForwardEntries };
     fs.writeFileSync(fullPath, JSON.stringify(updatedForwardIndex, null, 2));
-    
     return updatedForwardIndex;
 }
 
-
+// Process articles: update lexicon, forward index, and barrel postings
 function processNewArticles(articlesToProcess, lexicon, nextWordId) {
     const newPostingsByBarrel = new Map();
     const newForwardEntries = {}; 
@@ -144,13 +145,13 @@ function processNewArticles(articlesToProcess, lexicon, nextWordId) {
 
                     let wordId = lexicon.get(token);
                     if (!wordId) {
-                        wordId = String(nextWordId++); 
+                        wordId = String(nextWordId++);
                         lexicon.set(token, wordId);
                     }
 
                     const hit = { pos: position, type: field.type };
 
-                    // 1. Build the Forward Index entry (docEntry)
+                    // Build Forward Index entry
                     if (!docEntry[wordId]) docEntry[wordId] = [];
                     docEntry[wordId].push(hit);
 
@@ -161,7 +162,7 @@ function processNewArticles(articlesToProcess, lexicon, nextWordId) {
 
             if (Object.keys(docEntry).length === 0) continue;
 
-            // 2. Generate Inverted Index Postings for Barrels
+            // Generate postings for barrel files
             for (const wId in docEntry) {
                 const hitList = docEntry[wId];
                 const barrelIdx = parseInt(wId) % NUM_BARRELS;
@@ -178,7 +179,7 @@ function processNewArticles(articlesToProcess, lexicon, nextWordId) {
                 barrelMap.set(wId, list);
             }
             
-            // 3. Store the final Forward Index entry for saving
+            // Store Forward Index entry
             newForwardEntries[docId] = docEntry;
             processed++;
 
@@ -197,6 +198,7 @@ function processNewArticles(articlesToProcess, lexicon, nextWordId) {
     };
 }
 
+// Merge new postings into existing barrels
 function mergeNewPostings(newPostingsByBarrel) {
     let barrelsUpdated = 0;
     let totalMerged = 0;
@@ -218,18 +220,17 @@ function mergeNewPostings(newPostingsByBarrel) {
     return { barrelsUpdated, totalMerged };
 }
 
-// ⬅️ MODIFIED: The main logic now runs inside the worker thread.
+// Worker thread entry: incremental indexing
 function runIndexingJob(newArticles) {
     try {
-        // 1. Load Indexes
         const lexicon = loadIndex(LEXICON_FILE);
-        const docStore = loadIndex(DOC_STORE_FILE, false); 
-        const forwardIndex = loadIndex(FORWARD_INDEX_FILE, false); 
+        const docStore = loadIndex(DOC_STORE_FILE, false);
+        const forwardIndex = loadIndex(FORWARD_INDEX_FILE, false);
         const existingDocIds = new Set(Object.keys(docStore));
         
         console.log(`[Worker] Articles in batch received: ${newArticles.length}`);
 
-        // 2. Filter Duplicates (Idempotence)
+        // Filter already indexed articles
         const articlesToProcess = newArticles.filter(article => 
             article.id && !existingDocIds.has(article.id)
         );
@@ -237,58 +238,40 @@ function runIndexingJob(newArticles) {
         console.log(`[Worker] Unique new articles to index: ${articlesToProcess.length}`);
 
         if (articlesToProcess.length === 0) {
-            return {
-                status: 'success',
-                indexedCount: 0,
-                message: "No unique articles were found in the batch."
-            };
+            return { status: 'success', indexedCount: 0, message: "No unique articles to index." };
         }
 
-        // 3. Process Articles 
         let nextWordId = findNextWordId(lexicon);
-        const {
-            newPostingsByBarrel,
-            newForwardEntries, 
-            updatedLexicon,
-            processedCount,
-        } = processNewArticles(articlesToProcess, lexicon, nextWordId);
+        const { newPostingsByBarrel, newForwardEntries, updatedLexicon, processedCount } =
+            processNewArticles(articlesToProcess, lexicon, nextWordId);
 
-        // 4. Merge New Postings into Barrels (Synchronous I/O isolated here)
-        const { barrelsUpdated } = mergeNewPostings(newPostingsByBarrel);
+        // Merge postings into barrels
+        mergeNewPostings(newPostingsByBarrel);
 
-        // 5. Save ALL updated indices back to disk
+        // Save updated indices
         saveLexicon(LEXICON_FILE, updatedLexicon);
         updateAndSaveDocStore(articlesToProcess, docStore);
-        updateAndSaveForwardIndex(newForwardEntries, forwardIndex); 
+        updateAndSaveForwardIndex(newForwardEntries, forwardIndex);
 
         console.log("\n--- Incremental Indexing Complete (Worker) ---");
         console.log(`New documents indexed: ${processedCount}`);
-        
+
         return {
             status: 'success',
             indexedCount: processedCount,
-            message: `Successfully indexed ${processedCount} documents.`,
-            // Sending a flag to the main thread to signal cache reload is done at the manager level
+            message: `Successfully indexed ${processedCount} documents.`
         };
 
     } catch (err) {
         console.error("\nCRITICAL ERROR (Worker):", err.message);
-        return {
-            status: 'error',
-            message: err.message
-        };
+        return { status: 'error', message: err.message };
     }
 }
 
-// ⬅️ EXPORT/EXECUTION: When this file is run as a Worker, it listens for data.
+// Worker Thread listener
 if (parentPort) {
-    // This is the entry point when spawned as a Worker Thread
     const result = runIndexingJob(workerData.articles);
-    // Send result back to the main thread
     parentPort.postMessage(result);
 } else {
-    // Fallback for standalone execution (if needed)
     console.warn("appendIndex.js is designed to run as a Worker Thread.");
 }
-
-// ⬅️ Removed 'module.exports' for runIncrementalIndex as it's no longer a standard module export.

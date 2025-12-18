@@ -1,20 +1,31 @@
 import './ResultItem.css';
 
-// Displays a single search result item
-// Props:
-// - result: object returned by the search API, containing scoring info and metadata
+/**
+ * ResultItem Component
+ * Renders a single search result item with metadata and relevance info.
+ * 
+ * Props:
+ * - result: Object returned by the search API containing:
+ *    - docId: Unique document identifier
+ *    - score: Relevance score
+ *    - wordCount: Number of query terms matched
+ *    - proximityBonus: Bonus for term proximity
+ *    - title: Document title from Doc Store
+ *    - authors: Authors from Doc Store
+ *    - categories: Categories from Doc Store
+ */
 function ResultItem({ result }) {
   const { 
     docId, 
     score, 
     wordCount, 
     proximityBonus, 
-    title,      // Real document title
-    authors,    // Authors from Doc Store
-    categories  // Categories from Doc Store
+    title, 
+    authors, 
+    categories 
   } = result;
 
-  // Round relevance score for display
+  // Round relevance score to one decimal place for display
   const relevanceScore = Math.round(score * 10) / 10;
 
   // Placeholder snippet: currently using categories; can be replaced with abstract later
@@ -23,7 +34,7 @@ function ResultItem({ result }) {
   return (
     <article className="result-item">
       <div className="result-header">
-        <h3 className="result-title">{title}</h3> 
+        <h3 className="result-title">{title}</h3>
         <span className="result-score" title={`Relevance Score: ${relevanceScore}`}>
           Score: {relevanceScore}
         </span>

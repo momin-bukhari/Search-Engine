@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'; // useRef for timer & job tracking, useEffect for cleanup
+import { useState, useRef, useEffect } from 'react'; // useRef for timers, useEffect for cleanup
 import './AdminIndexer.css'; 
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -10,10 +10,10 @@ function AdminIndexer() {
     const [isIndexing, setIsIndexing] = useState(false);
     const [error, setError] = useState(null);
     
-    const jobStartTimeRef = useRef(null); // Track start time for polling
+    const jobStartTimeRef = useRef(null); // Track job start time
     const pollTimerRef = useRef(null);    // Polling interval reference
 
-    // Check search engine status to detect when indexing is complete
+    // Poll search engine health to detect when indexing is complete
     const checkIndexingStatus = async (startTime) => {
         try {
             const response = await fetch(`${API_BASE_URL}/api/health`);
@@ -41,7 +41,7 @@ function AdminIndexer() {
         }
     };
 
-    // Handle submission of JSON articles for indexing
+    // Submit JSON articles to the search engine for indexing
     const handleIndexSubmit = async () => {
         if (isIndexing) return; // Prevent multiple submissions
         setIsIndexing(true);
@@ -80,7 +80,7 @@ function AdminIndexer() {
         }
     };
 
-    // Cleanup polling timer when component unmounts
+    // Cleanup polling timer on component unmount
     useEffect(() => {
         return () => {
             if (pollTimerRef.current) clearInterval(pollTimerRef.current);

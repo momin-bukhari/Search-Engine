@@ -30,7 +30,7 @@ function buildVocabulary(articles) {
     if (!article) continue;
 
     try {
-      // Combine all relevant fields for token extraction
+      // Combine all text fields for token extraction
       const fields = [
         article.submitter,
         article.authors,
@@ -46,8 +46,8 @@ function buildVocabulary(articles) {
         if (!tokens) continue;
 
         for (const token of tokens) {
-          if (token.length < MIN_WORD_LENGTH) continue;
-          if (STOP_WORDS.has(token)) continue;
+          if (token.length < MIN_WORD_LENGTH) continue; // Skip short words
+          if (STOP_WORDS.has(token)) continue;          // Skip stop words
 
           // Assign a unique ID to each new word
           if (!vocabulary.has(token)) {
@@ -60,7 +60,6 @@ function buildVocabulary(articles) {
 
     } catch (err) {
       console.error(`Skipping corrupted article: ${err.message}`);
-      continue;
     }
   }
 
@@ -90,6 +89,7 @@ function main() {
     // Write output file
     fs.writeFileSync(outputPath, JSON.stringify(vocabObj, null, 2));
 
+    // Summary
     console.log("\n--- Lexicon Generation Complete ---");
     console.log(`Documents loaded:    ${articles.length}`);
     console.log(`Documents indexed:   ${processedCount}`);

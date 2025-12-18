@@ -1,29 +1,28 @@
 const express = require('express');
 const cors = require('cors');
 const apiRoutes = require('./routes/api');
-const searchEngine = require('./utils/searchEngine'); // ⬅️ ADDED
+const searchEngine = require('./utils/searchEngine'); // Search engine module
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- CRITICAL FIX: INITIALIZE SEARCH ENGINE ---
+// Initialize the search engine
 try {
-    searchEngine.initialize(); // ⬅️ ADDED
+    searchEngine.initialize();
     console.log('[Server] Search engine initialization successful.');
 } catch (error) {
     console.error("FATAL ERROR: Failed to initialize search engine. Shutting down.", error.message);
     process.exit(1); // Exit if essential data fails to load
 }
-// ----------------------------------------------
 
-// Middleware
+// Middleware setup
 app.use(cors());
 app.use(express.json());
 
-// Routes
+// API routes
 app.use('/api', apiRoutes);
 
-// Health check
+// Health check endpoint
 app.get('/', (req, res) => {
     res.json({
         status: 'ok',
@@ -41,7 +40,7 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Start server
+// Start the server
 app.listen(PORT, () => {
     console.log(`[Server] Running on http://localhost:${PORT}`);
     console.log(`[Server] API endpoints:`);
